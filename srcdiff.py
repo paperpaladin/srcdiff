@@ -16,6 +16,7 @@ Exit 0 if nothing suspicious, 1 if something is, 2 on error.
 """
 import argparse
 import hashlib
+import os
 import io
 import json
 import re
@@ -33,6 +34,85 @@ CODE_EXT = {
     ".sh", ".bash", ".zsh", ".pl", ".rb", ".js", ".ts", ".m4", ".am", ".ac",
     ".cmake", ".mk", ".so", ".dll", ".dylib", ".pyd", ".bat", ".ps1",
 }
+
+# Where an autotools build machine keeps the canonical copies of the m4 macros and
+# helper scripts that libtoolize/gettextize/autoreconf vendor INTO a release
+# tarball. These arrive from the build host, not from the project's git, so the
+# project's repo is the wrong oracle for them -- see VENDORED_DIRS use below.
+VENDOR_SOURCE_DIRS = [
+    "/usr/share/aclocal",
+    "/usr/share/gettext/m4",
+    "/usr/share/libtool/build-aux",
+    "/usr/share/automake-1.17",
+    "/usr/share/automake-1.16",
+    "/usr/local/share/aclocal",
+]
+
+# Paths inside an artifact where vendored build machinery lives.
+VENDORED_RE = re.compile(r"^(m4|build-aux|config|autoconf)/|^(ltmain\.sh|config\.(guess|sub)|install-sh|compile|depcomp|missing|ar-lib|test-driver|py-compile)$")
+
+
+# Autotools macros carry an upstream version marker. gettext writes
+# "# gettext.m4 serial 72 (gettext-0.21.1)"; libtool writes "# serial 59 LT_INIT".
+# It is the only thing in the file that says which upstream revision it is.
+# m4 macros: "# gettext.m4 serial 72 (gettext-0.21.1)" or "# serial 59 LT_INIT".
+SERIAL_RE = re.compile(rb"^#\s*(?:[\w.~-]+\.m4\s*\n?#?\s*)?serial\s+(\d+)", re.M | re.I)
+
+# build-aux helper scripts carry a date or a release instead of a serial:
+#   scriptversion=2018-03-07.03     (automake)
+#   timestamp='2022-01-09'         (config.guess / config.sub)
+#   VERSION=2.4.7.4-1ec8f-dirty    (ltmain.sh)
+SCRIPT_VER_RE = re.compile(
+    rb"""^\s*(?:scriptversion|timestamp|VERSION)\s*=\s*["']?([\w.:+~-]+)""",
+    re.M)
+
+
+def version_marker(data):
+    """Whatever the file says about which upstream revision it is, or None.
+
+    This is the only in-band statement of provenance these files carry, and the
+    whole vendored check turns on it: a file from a DIFFERENT upstream release is
+    expected to differ, a file claiming the SAME release is not.
+    """
+    m = SERIAL_RE.search(data)
+    if m:
+        return "serial " + m.group(1).decode()
+    m = SCRIPT_VER_RE.search(data)
+    if m:
+        return m.group(1).decode()
+    return None
+
+
+# A copyright year range is bumped on every upstream release WITHOUT bumping the
+# macro serial, so two copies of "serial 6" can differ by exactly this and nothing
+# else. Normalising it is narrow on purpose: only digits and dashes, only on a line
+# that says Copyright. Anything an attacker added would survive this.
+COPYRIGHT_YEARS_RE = re.compile(rb"(?i)(copyright[^\n]*?)([0-9]{4}(?:[-,0-9 ]*[0-9]{4})?)")
+
+
+def copyright_normalised(data):
+    return COPYRIGHT_YEARS_RE.sub(rb"\1<YEARS>", data)
+
+
+def canonical_copy(path):
+    """The build host's own copy of a vendored file, if it has one.
+
+    This is the second oracle, and the xz-utils backdoor is exactly why it has to
+    exist. build-to-host.m4 is a REAL gettext macro -- it ships in
+    /usr/share/aclocal on any machine with gettext installed. The attacker did not
+    invent a filename; they shipped a MODIFIED copy of a legitimate one. So a
+    name-based allowlist cannot separate the two, and the project's git repo never
+    contained either version. Only the canonical upstream copy can tell them apart.
+    """
+    if not VENDORED_RE.search(path):
+        return None
+    base = path.rsplit("/", 1)[-1]
+    for d in VENDOR_SOURCE_DIRS:
+        cand = os.path.join(d, base)
+        if os.path.isfile(cand):
+            return cand
+    return None
+
 
 # Files a build legitimately generates into an sdist. Present here, absent from
 # the repo, and that is expected rather than alarming.
@@ -139,7 +219,55 @@ def classify(artifact, repo):
     for path in sorted(set(artifact) - set(repo)):
         if matches_any(path, GENERATED):
             findings["generated"].append(path)
-        elif is_code(path):
+            continue
+
+        # Vendored build machinery: the repo is the wrong oracle. Ask the build
+        # host's canonical copy instead.
+        canon = canonical_copy(path)
+        if canon is not None:
+            try:
+                with open(canon, "rb") as fh:
+                    want = fh.read()
+            except OSError:
+                want = None
+            if want is not None:
+                got = artifact[path]
+                if want == got:
+                    findings["vendored-verified"].append(f"{path}  (matches {canon})")
+                    continue
+
+                # It differs -- but an autotools macro also legitimately differs
+                # between upstream releases, and the build host here is almost never
+                # running the version the release was cut with. The serial is what
+                # separates the two cases.
+                s_got, s_want = version_marker(got), version_marker(want)
+                if s_got and s_want and s_got != s_want:
+                    findings["vendored-version-skew"].append(
+                        f"{path}  {s_got} shipped vs {s_want} on this host")
+                    continue
+
+                # Same declared revision. Before calling it suspicious, rule out the
+                # one difference upstream makes without bumping the marker.
+                if copyright_normalised(got) == copyright_normalised(want):
+                    findings["vendored-version-skew"].append(
+                        f"{path}  {s_got or 'no marker'}, differs only in a "
+                        f"copyright year range")
+                    continue
+
+                # Same declared version, different bytes. THE XZ SIGNATURE: a
+                # legitimate vendored filename, absent from the repo, claiming to be
+                # a revision it is not byte-identical to. A file that was modified
+                # in place does not advertise itself as a new release.
+                detail = (s_got if s_got else "no version marker")
+                findings["HIGH-VENDORED"].append(
+                    f"{path}  {detail}, same as host, but content differs "
+                    f"({len(want)}B canonical vs {len(got)}B shipped, "
+                    f"{sha(want)[:12]} vs {sha(got)[:12]})")
+                continue
+            findings["vendored-unverifiable"].append(path)
+            continue
+
+        if is_code(path):
             findings["HIGH"].append(path)
         else:
             findings["artifact-only-data"].append(path)
@@ -167,6 +295,9 @@ def classify(artifact, repo):
 
 
 SEVERITY_ORDER = [
+    ("HIGH-VENDORED",
+     "vendored build machinery that does NOT match its canonical upstream copy "
+     "-- this is the exact xz-utils signature"),
     ("HIGH", "code in the artifact that is NOT in the repository"),
     ("MEDIUM", "code present in both, but with different content"),
     ("repo-only", "in the repository but missing from the artifact"),
@@ -176,11 +307,17 @@ SEVERITY_ORDER = [
     ("generated", "only in the artifact, but known to be generated"),
     ("generated-differs", "differs, but known to be generated"),
     ("repo-only-expected", "only in the repository, routinely excluded"),
+    ("vendored-verified", "vendored build machinery, byte-identical to upstream"),
+    ("vendored-version-skew",
+     "vendored build machinery from a different upstream release than this host has"),
+    ("vendored-unverifiable",
+     "vendored build machinery with no canonical copy on this host to compare against"),
 ]
 
 
 def report(findings, verbose=False):
-    quiet = {"generated", "generated-differs", "repo-only-expected", "eol-only"}
+    quiet = {"generated", "generated-differs", "repo-only-expected", "eol-only",
+             "vendored-verified", "vendored-version-skew"}
     suspicious = 0
 
     for key, blurb in SEVERITY_ORDER:
@@ -196,13 +333,22 @@ def report(findings, verbose=False):
         if len(items) > 40:
             print(f"      ... and {len(items) - 40} more")
 
-    suspicious = len(findings.get("HIGH", [])) + len(findings.get("MEDIUM", []))
+    suspicious = (len(findings.get("HIGH-VENDORED", []))
+                  + len(findings.get("HIGH", []))
+                  + len(findings.get("MEDIUM", [])))
     print()
+    unverifiable = len(findings.get("vendored-unverifiable", []))
     if suspicious:
-        print(f"{suspicious} suspicious finding(s). HIGH entries are the xz shape:"
-              " shipped code with no counterpart in the repository.")
+        print(f"{suspicious} suspicious finding(s). HIGH-VENDORED is the xz shape:"
+              " a legitimate vendored filename whose content does not match the"
+              " upstream it claims to be.")
     else:
-        print("No suspicious findings. Divergence is all generated or expected.")
+        print("No suspicious findings. Divergence is all generated, vendored-verified,"
+              " or expected.")
+    if unverifiable:
+        print(f"{unverifiable} vendored file(s) could not be checked: no canonical copy"
+              f" on this host. Install the matching autotools/gettext version to close"
+              f" that gap -- it is where an xz-shaped file would hide.")
     return 1 if suspicious else 0
 
 

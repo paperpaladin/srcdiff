@@ -12,7 +12,10 @@ code is the contract: this has to be usable from CI without parsing output.
 
 ## Hard invariant
 
-**No false negatives in the HIGH bucket.** A code-bearing file present in the
+**No false negatives in the HIGH buckets**, and the false-positive rate must stay
+low enough that a real finding is visible. The second half is not decoration: at
+16 false positives per clean release the tool was useless *despite* having no
+false negatives. A code-bearing file present in the
 artifact and absent from the repository must always be reported, and no
 suppression rule may ever hide one. Suppression rules are allowed to produce
 false *positives* in the lower buckets; they are not allowed to swallow a HIGH.
@@ -27,9 +30,13 @@ benign case, one proving a code-shaped file still survives it.
    xz filenames.
 2. Real packages, audited live. This is the oracle that found the
    `github.com/sponsors/...` bug, which no planted test could reach.
-3. (Not yet) the historical xz-utils 5.6.0 and 5.6.1 tarballs against their git
-   tags. The tool should light up. Until it does, the HIGH bucket is untested
-   against a real attack.
+3. **Real upstream artifacts.** `t/fixtures/` holds trimmed copies of the genuine
+   xz-5.4.5 release tarball and git tag. This is the oracle that proved the HIGH
+   bucket was worthless on autotools projects (16 false positives, all of them the
+   same shape as the attack) and that drove the vendored second-oracle design. The
+   compromised 5.6.1 tarball itself is unobtainable -- purged from the archives --
+   so the technique is reproduced against a clean release instead, which is a real
+   limit on what the test proves.
 
 ## Non-goals
 
@@ -49,16 +56,21 @@ provenance verification; that is a different tool.
 - [x] 03 PyPI metadata fetch, sdist download, GitHub tag download with
       multi-spelling fallback
 - [x] 04 fix: prefer source-ish project_urls keys, reject non-repo github paths
+- [x] 05 the xz test against real upstream artifacts -- and the redesign it forced
+      why: 16 HIGH false positives on a genuine clean release, every one an m4
+           file absent from git, i.e. indistinguishable from the real attack.
+           Vendored build machinery comes from the BUILD HOST, so the repo is the
+           wrong oracle for it; and build-to-host.m4 is a real gettext macro, so a
+           name allowlist cannot separate benign from hostile either.
+      files: srcdiff.py t/test_srcdiff.py t/mkxzfixtures.sh t/fixtures/
+      proves: 16 false positives -> 1; an injected build-to-host.m4 with its serial
+              intact is reported as HIGH-VENDORED; the delta between the clean and
+              tampered runs is exactly the injection and nothing else
       why: the first live run resolved a Funding link and parsed "sponsors" as
            the repository owner
 
 ### Milestone 1 -- make the HIGH bucket trustworthy
 
-- [ ] 05 **the xz regression test**: fetch xz-utils 5.6.1's release tarball and
-      its git tag, assert `build-to-host.m4` lands in HIGH
-      why: the one test that proves this tool would have caught the real thing.
-           Until it exists, the HIGH bucket is only tested against my own
-           imagination of an attack.
 - [ ] 06 a corpus of 20 known-clean packages, asserting zero HIGH across all of
       them -- the false-positive rate, measured rather than assumed
 - [ ] 07 cache downloads on disk, so 05 and 06 do not re-fetch on every run

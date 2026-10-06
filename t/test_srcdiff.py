@@ -49,6 +49,21 @@ def run(artifact_files, repo_files, artifact_root="demo-1.0", repo_root="demo-1.
         return proc.returncode, proc.stdout + proc.stderr
 
 
+def eq(label, got, want):
+    """Plain assertion. check() below is the fixture runner, not this."""
+    global passed, failed
+    if got == want:
+        passed += 1
+        print(f"ok   {label}")
+    else:
+        failed += 1
+        print(f"FAIL {label}\n       got  {got!r}\n       want {want!r}")
+
+
+def truthy(label, cond):
+    eq(label, bool(cond), True)
+
+
 def check(label, artifact, repo, want_rc, want_in=None, want_not_in=None, **kw):
     global passed, failed
     rc, out = run(artifact, repo, **kw)
@@ -174,6 +189,107 @@ else:
     print(f"FAIL mixed findings: exit {rc}")
     for line in out.strip().splitlines():
         print(f"     {line}")
+
+# ============================================================================
+# The xz test: a REAL autotools project, from real upstream artifacts.
+#
+# Everything above is a toy project with four files and one planted divergence.
+# This section is the only part that answers the question that matters: does the
+# HIGH bucket survive contact with a real release tarball, where HUNDREDS of files
+# legitimately differ from git?
+#
+# The first run said no. Pointed at the genuine xz-5.4.5 release tarball against
+# its genuine git tag, srcdiff produced SIXTEEN HIGH findings, all false, and every
+# one of them was an m4/*.m4 file present in the tarball and absent from git --
+# which is the exact shape of the xz-utils backdoor. The signal would have been one
+# line in seventeen. That is not a detector.
+#
+# The cause is structural: libtoolize and gettextize vendor those macros in from the
+# BUILD HOST, so the project's repository is simply the wrong oracle for them. And a
+# name-based allowlist cannot help, because build-to-host.m4 is itself a legitimate
+# gettext macro -- it ships in /usr/share/aclocal on any machine with gettext
+# installed. The attacker did not invent a filename. They shipped a modified copy of
+# a real one.
+#
+# So vendored files are checked against the canonical copy on this host, and the
+# version marker (serial / scriptversion / timestamp / VERSION) separates "a
+# different upstream release, expected to differ" from "claims to be this exact
+# release and is not". The second is the xz signature.
+#
+# Fixtures are the real m4/ and build-aux/ trees from the real artifacts, trimmed
+# to stay committable. The tampered one is the genuine gettext build-to-host.m4
+# with its serial intact and a comment appended -- the TECHNIQUE, not the payload.
+# Detection keys on provenance and never on recognising malicious content, which is
+# the whole reason this approach can work at all.
+
+FIX = HERE / "fixtures"
+
+
+def run_files(artifact, repo):
+    proc = subprocess.run(
+        [sys.executable, str(SRCDIFF), "compare", str(FIX / artifact), str(FIX / repo)],
+        capture_output=True, text=True)
+    return proc.returncode, proc.stdout + proc.stderr
+
+
+if (FIX / "xz-5.4.5-gittag-vendored.tar.gz").exists():
+    GIT = "xz-5.4.5-gittag-vendored.tar.gz"
+
+    rc_clean, clean = run_files("xz-5.4.5-release-vendored.tar.gz", GIT)
+    rc_tamp, tamp = run_files("xz-5.4.5-tampered-vendored.tar.gz", GIT)
+
+    def high_lines(out):
+        """Paths listed under HIGH-VENDORED."""
+        keep, found = False, []
+        for line in out.splitlines():
+            if "HIGH-VENDORED:" in line:
+                keep = True
+                continue
+            if keep:
+                if not line.strip():
+                    break
+                if line.startswith("  ") and ":" not in line.split()[0]:
+                    found.append(line.strip().split()[0])
+        return found
+
+    clean_high = high_lines(clean)
+    tamp_high = high_lines(tamp)
+
+    # The point of the whole exercise: an unmodified release must not put
+    # build-to-host.m4 in the HIGH bucket, and a tampered one must.
+    eq("clean release does not flag build-to-host.m4",
+          any("build-to-host" in p for p in clean_high), False)
+    eq("tampered release DOES flag build-to-host.m4",
+          any("build-to-host" in p for p in tamp_high), True)
+    eq("and the tampered copy is reported as same-version, different-content",
+          "serial 5, same as host, but content differs" in tamp, True)
+
+    # The 22 genuinely-skewed vendored files must stay out of the way in BOTH runs.
+    # If this regresses, the signal drowns again exactly as it did the first time.
+    truthy("clean run suppresses the vendored version skew",
+           "vendored-version-skew" in clean)
+    eq("clean run has at most 2 HIGH-VENDORED entries", len(clean_high) <= 2, True)
+
+    # The delta between the two runs must be precisely the injection -- not a
+    # general increase in alarm.
+    delta = set(tamp_high) - set(clean_high)
+    eq("the only new finding is the injected file", len(delta), 1)
+    truthy("and it is build-to-host.m4",
+           delta and "build-to-host" in next(iter(delta)))
+
+    # Exit status is the CI contract.
+    eq("tampered release exits nonzero", rc_tamp, 1)
+
+    # The known survivor is asserted rather than normalised away. nls.m4 differs
+    # from this host's copy only because upstream reflowed its header comment
+    # without bumping the serial. One false positive in a 687-file tarball, which a
+    # human dismisses in ten seconds, is a better place to stop than a
+    # normalisation rule broad enough to absorb arbitrary comment changes -- that
+    # rule would also absorb an injected comment block.
+    eq("the known nls.m4 survivor is still reported, not suppressed",
+          any("nls.m4" in p for p in clean_high), True)
+else:
+    print("SKIP xz fixtures absent; run t/mkxzfixtures.sh to rebuild them")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

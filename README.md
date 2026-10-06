@@ -41,7 +41,8 @@ Findings are bucketed:
 
 | bucket | meaning |
 |---|---|
-| **HIGH** | code in the artifact with no counterpart in the repo -- the xz shape |
+| **HIGH-VENDORED** | vendored build machinery that does not match the canonical upstream copy it claims to be -- **the actual xz signature** |
+| **HIGH** | code in the artifact with no counterpart in the repo |
 | **MEDIUM** | code in both, with different content |
 | repo-only | in the repo, missing from the artifact, not a usual exclusion |
 | data-differs / artifact-only-data | non-code divergence |
@@ -74,6 +75,75 @@ actual xz filenames -- are in there.
 
 The offline `compare` mode exists so these tests need no network: it takes two
 local archives and does the same comparison.
+
+## The xz test, and what it proved wrong
+
+Everything above is a toy project with four files and one planted divergence.
+Pointing the tool at a **real** release tarball is the only thing that answers the
+question that matters, and the first time I did, the answer was no.
+
+Against the genuine `xz-5.4.5` release tarball and its genuine git tag, srcdiff
+produced **sixteen HIGH findings, all false** -- and every one of them was an
+`m4/*.m4` file present in the tarball and absent from git. Which is the exact
+shape of the xz-utils backdoor. The real signal would have been one line in
+seventeen. That is not a detector; it is noise with an extra row.
+
+The cause is structural. `libtoolize` and `gettextize` vendor those macros in
+**from the build host**, so the project's repository is simply the wrong oracle
+for them. And a name-based allowlist cannot rescue it, because:
+
+> `build-to-host.m4` is a **legitimate gettext macro.** It ships at
+> `/usr/share/aclocal/build-to-host.m4` on any machine with gettext installed.
+> The attacker did not invent a filename. They shipped a modified copy of a real
+> one -- which is precisely why it survived review.
+
+So vendored files get a **second oracle**: the canonical copy on the build host.
+And the in-band version marker -- `serial` for m4 macros, `scriptversion` /
+`timestamp` / `VERSION` for `build-aux` scripts -- separates the two cases:
+
+- **marker differs** → a different upstream release, expected to differ, suppressed
+- **marker matches, bytes differ** → the file claims to be a revision it is not
+  byte-identical to. **That is the signature.** A file modified in place does not
+  advertise itself as a new release.
+
+Result on the real artifacts: **16 false positives down to 1**, and an injected
+`build-to-host.m4` surfaces immediately:
+
+```
+HIGH-VENDORED: vendored build machinery that does NOT match its canonical
+               upstream copy -- this is the exact xz-utils signature
+    m4/build-to-host.m4  serial 5, same as host, but content differs
+                         (9242B canonical vs 9582B shipped, 8307c1f05ec9 vs 20f2290242b2)
+    m4/nls.m4            serial 6, same as host, but content differs
+                         (1236B canonical vs 1234B shipped, 421f67f14db7 vs dcd5942eb789)
+
+22 vendored-version-skew (suppressed)
+```
+
+### Why the sample is not the real one
+
+The compromised `xz-5.6.1` tarball has been purged from the archives it would be
+fetched from -- `snapshot.debian.org` carries only `5.6.1+really5.4.5-1`, Debian's
+revert. That is correct hygiene on their part, and it means the actual artifact is
+not obtainable.
+
+So `t/mkxzfixtures.sh` reproduces the **technique** against a clean release: the
+genuine `/usr/share/aclocal/build-to-host.m4`, serial left intact, one comment
+appended. No malicious content of any kind. Detection keys on **provenance** and
+never on recognising a payload -- which is the only reason the check generalises
+past this one incident, and the honest limit of what the test proves.
+
+### The one false positive I left in
+
+`m4/nls.m4` differs from this host's copy because upstream reflowed its header
+comment from one line to two **without bumping the serial**. It stays reported.
+
+One false positive in a 687-file tarball, which a human dismisses in ten seconds,
+is a better place to stop than a normalisation rule broad enough to absorb
+arbitrary comment changes. That rule would also absorb an injected comment block.
+
+Fixtures are real trimmed upstream artifacts, regenerable with
+`t/mkxzfixtures.sh` -- a fixture nobody can rebuild is a magic number.
 
 ## The live run found a bug the tests could not
 
