@@ -101,8 +101,8 @@ So vendored files get a **second oracle**: the canonical copy on the build host.
 And the in-band version marker -- `serial` for m4 macros, `scriptversion` /
 `timestamp` / `VERSION` for `build-aux` scripts -- separates the two cases:
 
-- **marker differs** → a different upstream release, expected to differ, suppressed
-- **marker matches, bytes differ** → the file claims to be a revision it is not
+- **marker differs** -> a different upstream release, expected to differ, suppressed
+- **marker matches, bytes differ** -> the file claims to be a revision it is not
   byte-identical to. **That is the signature.** A file modified in place does not
   advertise itself as a new release.
 
