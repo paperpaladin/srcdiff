@@ -312,5 +312,35 @@ else:
     print("        checkout. Run t/mkxzfixtures.sh to rebuild them, or set")
     print("        SRCDIFF_ALLOW_NO_FIXTURES=1 to run the other 16 only.")
 
+# --------------------------------------------------- the exit-status contract
+# README.md and srcdiff.py's docstring have both said "0 if nothing suspicious,
+# 1 if HIGH or MEDIUM, 2 on error" from the start, and no path produced 2:
+# every error site raises SystemExit("srcdiff: ..."), which Python exits 1 for,
+# and main() returns only 0 or 1. So "could not answer" and "answered and found
+# something" were one status, in a tool whose PLAN calls that status the
+# contract making it usable from CI without parsing output. An unreadable path
+# was worse still -- a traceback and exit 1, so a typo read as a finding.
+#
+# Three statuses, asserted. 0 and 1 come from the fixtures above; these are the
+# error paths.
+def status_of(*argv):
+    return subprocess.run([sys.executable, str(SRCDIFF)] + list(argv),
+                          capture_output=True, text=True)
+
+for argv, want, label in [
+    (["compare", "/nonexistent/a", "/nonexistent/b"], 2, "an unreadable path"),
+    (["compare", str(HERE / "test_srcdiff.py"), str(HERE / "test_srcdiff.py")],
+     2, "an archive that is not an archive"),
+    (["--help"], 0, "--help"),
+    # No PyPI case here on purpose: every other assertion in this file is
+    # offline, and an error path that needs the network would turn a lost
+    # connection into a failed contract test.
+]:
+    r = status_of(*argv)
+    eq("exit 2 contract: %s" % label, r.returncode, want)
+    if want == 2:
+        truthy("...and %s says what went wrong, with no traceback" % label,
+               "srcdiff:" in r.stderr and "Traceback" not in r.stderr)
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

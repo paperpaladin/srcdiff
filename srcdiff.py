@@ -167,23 +167,33 @@ def read_archive(path_or_bytes, label):
         with open(path_or_bytes, "rb") as fh:
             data = fh.read()
 
+    # A file that is not an archive at all is an error, not a crash. Handing
+    # this function an ordinary text file used to raise tarfile.ReadError and
+    # print a traceback, exiting 1 -- the same status as "found something
+    # suspicious", for a tool whose exit code is meant to be readable from CI.
+    # ReadError and BadZipFile are not OSError subclasses, so a handler at the
+    # entry point does not reach them, and the message is better here anyway
+    # because it can name which of the two archives was unreadable.
     entries = {}
-    if data[:2] == b"PK":
-        with zipfile.ZipFile(io.BytesIO(data)) as zf:
-            for info in zf.infolist():
-                if info.is_dir():
-                    continue
-                entries[info.filename] = zf.read(info)
-    else:
-        mode = "r:gz" if data[:2] == b"\x1f\x8b" else "r:*"
-        with tarfile.open(fileobj=io.BytesIO(data), mode=mode) as tf:
-            for member in tf.getmembers():
-                if not member.isfile():
-                    continue
-                fh = tf.extractfile(member)
-                if fh is None:
-                    continue
-                entries[member.name] = fh.read()
+    try:
+        if data[:2] == b"PK":
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                for info in zf.infolist():
+                    if info.is_dir():
+                        continue
+                    entries[info.filename] = zf.read(info)
+        else:
+            mode = "r:gz" if data[:2] == b"\x1f\x8b" else "r:*"
+            with tarfile.open(fileobj=io.BytesIO(data), mode=mode) as tf:
+                for member in tf.getmembers():
+                    if not member.isfile():
+                        continue
+                    fh = tf.extractfile(member)
+                    if fh is None:
+                        continue
+                    entries[member.name] = fh.read()
+    except (tarfile.TarError, zipfile.BadZipFile) as e:
+        raise SystemExit(f"srcdiff: {label} is not a readable archive: {e}")
 
     if not entries:
         raise SystemExit(f"srcdiff: {label} contains no files")
@@ -419,7 +429,8 @@ def fetch_tag(owner, repo, version):
             if exc.code != 404:
                 raise
     raise SystemExit(f"srcdiff: no tag found for {version} in {owner}/{repo} "
-                     f"(tried v{version}, {version}, release-{version})")
+                     f"(tried v{version}, {version}, release-{version}, "
+                     f"{repo}-{version})")
 
 
 def cmd_audit(args):
@@ -469,5 +480,30 @@ def main():
     return args.fn(args)
 
 
+# Exit 2 means "could not answer", and it has to be distinct from exit 1,
+# "answered and found something". README.md and the docstring above have both
+# documented 2 since the beginning and no path produced it: every error site
+# raises SystemExit("srcdiff: ..."), which Python exits 1 for, and main()
+# returns only 0 or 1. So a missing sdist, an undeclared repository and a real
+# finding were one status -- in a tool whose PLAN calls the exit code the
+# contract that makes it "usable from CI without parsing output".
+#
+# An unreadable path was worse than that: `compare /nonexistent /nonexistent`
+# printed a traceback and exited 1, so a typo in a CI invocation read as a
+# supply-chain finding.
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except SystemExit as e:
+        # A string argument is one of our own diagnostics; an int is a status
+        # main() chose, and argparse's own exits (2 for a usage error) pass
+        # through unchanged.
+        if isinstance(e.code, str):
+            print(e.code, file=sys.stderr)
+            sys.exit(2)
+        raise
+    except OSError as e:
+        print("srcdiff: %s" % e, file=sys.stderr)
+        sys.exit(2)
+    except KeyboardInterrupt:
+        sys.exit(130)

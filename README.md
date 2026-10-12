@@ -75,7 +75,7 @@ ok   and it is build-to-host.m4
 ok   tampered release exits nonzero
 ok   the known nls.m4 survivor is still reported, not suppressed
 
-25 passed, 0 failed
+30 passed, 0 failed
 ```
 
 A detector nobody has watched fail is not evidence, so every suppression rule has
@@ -169,7 +169,8 @@ trusting a suite that only tests the interesting part.
 ## Status
 
 Works, on PyPI sdists against GitHub tags. Tag spelling is guessed from a short
-list (`v1.2.3`, `1.2.3`, `release-1.2.3`) and the one that worked is printed.
+list (`v1.2.3`, `1.2.3`, `release-1.2.3`, `REPO-1.2.3`) and the one that
+worked is printed.
 
 Not implemented: wheels (they contain compiled output, so they need a different
 comparison entirely), npm or crates.io or distro tarballs, GitLab or Codeberg,
