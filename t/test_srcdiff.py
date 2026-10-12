@@ -9,6 +9,7 @@ everything is as useless as one that flags nothing.
 No network, no pytest. Run it: python3 t/test_srcdiff.py
 """
 import io
+import os
 import subprocess
 import sys
 import tarfile
@@ -232,7 +233,19 @@ def run_files(artifact, repo):
     return proc.returncode, proc.stdout + proc.stderr
 
 
-if (FIX / "xz-5.4.5-gittag-vendored.tar.gz").exists():
+# The three xz fixtures are committed to this repo, so their absence is a
+# broken checkout rather than a machine that happens to lack a tool. Skipping
+# them silently cost nine of the twenty-five assertions -- including every
+# one that touches build-to-host.m4, which is the injection this whole
+# program exists to find -- and still exited 0. SRCDIFF_ALLOW_NO_FIXTURES=1
+# is there for deliberately running without them.
+XZ_FIXTURES = [
+    "xz-5.4.5-gittag-vendored.tar.gz",
+    "xz-5.4.5-release-vendored.tar.gz",
+    "xz-5.4.5-tampered-vendored.tar.gz",
+]
+missing = [f for f in XZ_FIXTURES if not (FIX / f).exists()]
+if not missing:
     GIT = "xz-5.4.5-gittag-vendored.tar.gz"
 
     rc_clean, clean = run_files("xz-5.4.5-release-vendored.tar.gz", GIT)
@@ -288,8 +301,16 @@ if (FIX / "xz-5.4.5-gittag-vendored.tar.gz").exists():
     # rule would also absorb an injected comment block.
     eq("the known nls.m4 survivor is still reported, not suppressed",
           any("nls.m4" in p for p in clean_high), True)
+elif os.environ.get("SRCDIFF_ALLOW_NO_FIXTURES") == "1":
+    print("SKIP xz fixtures absent (SRCDIFF_ALLOW_NO_FIXTURES=1): %s"
+          % ", ".join(missing))
+    print("SKIP nine assertions not run, including every build-to-host.m4 one")
 else:
-    print("SKIP xz fixtures absent; run t/mkxzfixtures.sh to rebuild them")
+    failed += 1
+    print("not ok  xz fixtures present: missing %s" % ", ".join(missing))
+    print("        these are committed to the repo, so this is a broken")
+    print("        checkout. Run t/mkxzfixtures.sh to rebuild them, or set")
+    print("        SRCDIFF_ALLOW_NO_FIXTURES=1 to run the other 16 only.")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

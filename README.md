@@ -57,15 +57,25 @@ Exit 0 if nothing suspicious, 1 if HIGH or MEDIUM, 2 on error.
 
 ```
 $ make test
+ok   identical archives are clean
 ok   extra .py in the artifact is HIGH
 ok   extra .sh in the artifact is HIGH
 ok   extra .m4 in the artifact is HIGH
+ok   extra .so in the artifact is HIGH
 ok   changed .py content is MEDIUM
 ok   PKG-INFO only in the artifact is suppressed
-ok   line-ending-only difference is not a finding
-ok   tests/ only in the repo is expected
 ...
-16 passed, 0 failed
+ok   clean release does not flag build-to-host.m4
+ok   tampered release DOES flag build-to-host.m4
+ok   and the tampered copy is reported as same-version, different-content
+ok   clean run suppresses the vendored version skew
+ok   clean run has at most 2 HIGH-VENDORED entries
+ok   the only new finding is the injected file
+ok   and it is build-to-host.m4
+ok   tampered release exits nonzero
+ok   the known nls.m4 survivor is still reported, not suppressed
+
+25 passed, 0 failed
 ```
 
 A detector nobody has watched fail is not evidence, so every suppression rule has
