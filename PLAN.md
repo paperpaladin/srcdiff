@@ -35,7 +35,7 @@ benign case, one proving a code-shaped file still survives it.
    bucket was worthless on autotools projects (16 false positives, all of them the
    same shape as the attack) and that drove the vendored second-oracle design. The
    compromised 5.6.1 tarball itself is unobtainable, purged from the archives,
-   so the technique is reproduced against a clean release instead, which is a real
+   so the technique is reproduced against a clean release instead, a real
    limit on what the test proves.
 
 ## Non-goals

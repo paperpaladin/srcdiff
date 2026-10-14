@@ -34,7 +34,7 @@ generates `configure` and `Makefile.in`.
 
 So the work is not diffing. It is **suppressing that noise without suppressing
 the one finding that matters**. A tool that flags everything is as useless as one
-that flags nothing, which is why the tests check severity bucketing and not just
+that flags nothing, so the tests check severity bucketing and not just
 detection.
 
 Findings are bucketed:
@@ -140,7 +140,7 @@ not obtainable.
 So `t/mkxzfixtures.sh` reproduces the technique against a clean release: the
 genuine `/usr/share/aclocal/build-to-host.m4`, serial left intact, one comment
 appended. No malicious content of any kind. Detection keys on provenance and
-never on recognising a payload, which is the only reason the check generalises
+never on recognising a payload, the only reason the check generalises
 past this one incident, and the honest limit of what the test proves.
 
 ### The one false positive I left in
