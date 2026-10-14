@@ -159,7 +159,7 @@ Fixtures are real trimmed upstream artifacts, regenerable with
 
 The first `audit` against a real package resolved the repository to
 `github.com/sponsors/hynek`: a funding link, and parsed `sponsors` as the
-owner. The fix prefers `project_urls` keys that actually claim to be source, and
+owner. That fix prefers `project_urls` keys that actually claim to be source, and
 rejects a list of `github.com` paths that are not repositories.
 
 No planted-divergence test would ever have caught that, because it is in the
