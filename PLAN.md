@@ -13,7 +13,7 @@ code is the contract: this has to be usable from CI without parsing output.
 ## Hard invariant
 
 No false negatives in the HIGH buckets, and the false-positive rate must stay
-low enough that a real finding is visible. The second half is not decoration: at
+low enough that a real finding is visible. The second half is not decoration. At
 16 false positives per clean release the tool was useless *despite* having no
 false negatives. A code-bearing file present in the
 artifact and absent from the repository must always be reported, and no
