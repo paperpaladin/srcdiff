@@ -71,8 +71,27 @@ provenance verification. That is a different tool.
 
 ### Milestone 1: make the HIGH bucket trustworthy
 
-- [ ] 06 a corpus of 20 known-clean packages, asserting zero HIGH across all of
+- [x] 06 a corpus of 20 known-clean packages, asserting zero HIGH across all of
       them: the false-positive rate, measured, not assumed
+      files: t/test_srcdiff.py
+      done: 20 installed Python distributions read where they live, no network
+            and nothing vendored into the repo. 5942 file comparisons, 0 HIGH,
+            0 HIGH-VENDORED, 0 MEDIUM. Lower severity: 2135 generated (all
+            .pyc, suppressed) and 151 artifact-only-data, every one of them a
+            file inside a .dist-info directory. Clean-ness is re-established on
+            every run: 3787 corpus files re-hashed against the publisher's own
+            RECORD manifest, 0 mismatches. 78 distributions were present, 55
+            qualify and the largest 20 are taken; the 23 dropped are printed
+            with a reason (13 ship compiled objects, 9 have fewer than 10
+            files, 1 is an editable install).
+      proves: the gate is not vacuous. is_code() forced True -- the
+            flags-everything failure -- turns all 20 packages red with 151
+            HIGH; is_code() forced False fails the two planted cases, which
+            run on every invocation. Two mutations it does NOT catch are
+            recorded in the harness and the README.
+      limit: the repo side is the publisher's manifest, not a git tree, because
+            no artifact-and-repository pair exists on this machine. The xz
+            fixtures remain the only place a real artifact meets a real repo.
 - [ ] 07 cache downloads on disk, so 05 and 06 do not re-fetch on every run
 - [ ] 08 `--json` output, so findings are machine-readable for 09
 
